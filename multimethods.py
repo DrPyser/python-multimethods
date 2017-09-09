@@ -108,6 +108,3 @@ if __name__ == "__main__":
 
     say({"type": "person", "what": "Hello!"}, {"type": "robot", "what": "GOODBYE!"})
 
-
-
-
