@@ -89,19 +89,25 @@ class DispatchFailure(Exception):
             ", ".join("{}={}".format(k, v) for k,v in self.kwargs.items())
         )
 
+
+
+def first_method(methods, *args, **kwargs):
+    return next(methods)(*args, **kwargs)
+    
 class multimethod:
     """A generic function object supporting multiple dispatch"""
-    def __init__(self, fn, dispatcher=None):
+    def __init__(self, fn, dispatcher=None, method_combiner=first_method):
         self._dispatcher = dispatcher
         self._original = fn
+        self._method_combiner = method_combiner
         self._methods = OrderedDict(())
         self.__name__ = fn.__name__
         self.__doc__ = fn.__doc__
 
     def __call__(self, *args, **kwargs):
         """Dispatch appropriate method on arguments"""        
-        method = self.dispatch(*args, **kwargs)
-        return method(*args, **kwargs)
+        methods = self.dispatch(*args, **kwargs)
+        return self._method_combiner(methods, *args, **kwargs)
 
     def add_method(self, specs, kwspecs,  method):
         self._methods[(specs, tuple(sorted(kwspecs.items())))] = method
@@ -115,9 +121,7 @@ class multimethod:
         for ((specs, kwspecs), method) in self._methods.items():
             if all(ismatch(arg, dispatcher(p)) for (arg, p) in zip(args, specs))\
                and all(ismatch(kwargs[k], dispatcher(p)) for k, p in kwspecs):
-                return method
-        else:
-            raise DispatchFailure(self, args, kwargs)
+                yield method
 
 
 def generic(*args, **kwargs):
