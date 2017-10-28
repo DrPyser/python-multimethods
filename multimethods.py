@@ -1,93 +1,9 @@
 from collections import OrderedDict
 from abc import ABC
 from ..basics import identity
-from ..patmat import predicate_method, MatchFailure
-
-
-def ismatch(value, pattern):
-    """Evaluate a match pattern, return True if match else False"""
-    try:
-        pattern.__match__(value)
-        return True
-    except MatchFailure:
-        return False
-
-    
-class predicate(ABC):
-    """Base class for 'predicate' objects implementing the predicate protocol"""
-    def __init__(self, predicate):
-        self.predicate = predicate
-
-    @predicate_method
-    def __match__(self, x):
-        return self.predicate(x)
-
-
-class Is(predicate):
-    def __init__(self, identity):
-        self._identity = identity
-
-    @predicate_method
-    def __match__(self, x):
-        return x is self._identity
-
-    
-class Equal(predicate):
-    def __init__(self, equal):
-        self._equal = equal
-
-    @predicate_method
-    def __match__(self, x):
-        return x == self._equal
-
-    
-class In(predicate):
-    def __init__(self, iterable):
-        self._container = iterable
-
-    @predicate_method
-    def __match__(self, x):
-        return x in self._container
-
-    
-class All(predicate):
-    """Predicates combiner that match a value which is matched by all subpredicates"""
-    def __init__(self, *predicates):
-        self.predicates = predicates
-
-    @predicate_method
-    def __match__(self, x):
-        return all(ismatch(x, p) for p in self.predicates)
-
-    
-class Any(predicate):
-    """Predicates combiner that match a value which is matched by any(at least one) subpredicates"""
-    def __init__(self, *predicates):
-        self.predicates = predicates
-
-    @predicate_method
-    def __match__(self, x):
-        return any(ismatch(x, p) for p in self.predicates)
-
-    
-class OneOf(predicate):
-    """Predicates combiner that match a value which is matched by one and only one subpredicate"""
-    def __init__(self, *predicates):
-        self.predicates = predicates
-
-    @predicate_method
-    def __match__(self, x):
-        return len(tuple(True for p in self.predicates if ismatch(x, p))) == 1
-
-
-class Type(predicate):
-    """Predicate that match a value by its type"""
-    def __init__(self, t):
-        self._type = t
-
-    @predicate_method
-    def __match__(self, x):
-        return isinstance(x, self._type)
+from .patmat import predicate_method, MatchFailure, getmatch
+from functools import reduce
+from collections import deque
 
 
 class DispatchFailure(Exception):
@@ -105,43 +21,103 @@ class DispatchFailure(Exception):
         )
 
 
-def first_method(methods, *args, **kwargs):
-    return next(methods)(*args, **kwargs)
+def raise_dispatch_failure(generic, args, kwargs):
+    raise DispatchFailure(generic, args, kwargs)
+            
+class MethodCombiner:
+    def __init__(self, generic):
+        self.generic = generic
+
+    def fail(self, args, kwargs):
+        raise_dispatch_failure(self.generic, args, kwargs)
+
+    def combine(self, methods, args, kwargs):
+        raise NotImplementedError()
+
+
+class FirstMethod(MethodCombiner):
+    def combine(self, methods, args, kwargs):
+        try:
+            (m, xargs, xkwargs) = next(methods)
+            return m(*xargs, **xkwargs)
+        except StopIteration:
+            self.fail(args, kwargs)
+        
+
+class LastMethod(MethodCombiner):
+    def combine(self, methods, args, kwargs):
+        try:
+            (method, xargs, xkwargs) = dequeue(methods, maxlen=1).pop()
+            return method(*xargs, **xkwargs)
+        except IndexError:
+            self.fail(args, kwargs)
+        
+
+class AllMethod(MethodCombiner):
+    def combine(self, methods, args, kwargs):
+        choices = tuple(methods)
+        if any(methods):
+            for (method, xargs, xkwargs) in methods:
+                yield method(*xargs, **xkwargs)
+        else:
+            self.fail(args, kwargs)
+
+
+class OpMethod(AllMethod):
+    def __init__(self, generic, op):
+        super().__init__(generic)
+        self.op = op
+
+    def combine(self, methods, args, kwargs):
+        results = super().combine(methods, args, kwargs)
+        return reduce(self.op, results)
     
+        
 class multimethod:
     """A generic function object supporting multiple dispatch"""
-    def __init__(self, fn, dispatcher=None, method_combiner=first_method):
-        self._dispatcher = dispatcher
-        self._original = fn
-        self._method_combiner = method_combiner
-        self._methods = OrderedDict(())
+    def __init__(self, fn, pattern=None, method_combiner=None):
+        """
+        Creates a multimethod object
+        :param fn: function used in declaration
+        :param pattern: callable that can construct a pattern from the method dispatch specifiers
+        :param method_combiner: MethodCombiner object that will be used to compute final result from matched methods
+        """
+        self.pattern_constructor = pattern 
+        self.func = fn
+        self.method_combiner = method_combiner or FirstMethod(self)
+        self.methods = OrderedDict(())
         self.__name__ = fn.__name__
         self.__doc__ = fn.__doc__
 
     def __call__(self, *args, **kwargs):
-        """Dispatch appropriate method on arguments"""        
+        """Dispatch appropriate method on arguments"""
         methods = self.dispatch(*args, **kwargs)
-        return self._method_combiner(methods, *args, **kwargs)
+        return self.method_combiner.combine(methods, args, kwargs)
 
     def add_method(self, specs, kwspecs,  method):
-        self._methods[(specs, tuple(sorted(kwspecs.items())))] = method
+        #todo: verify that patterns are hashable
+        self.methods[(specs, tuple(sorted(kwspecs.items())))] = method
 
     def get_method(self, specs):
-        return self._methods.get(specs)
+        return self.methods.get(specs)
 
     def dispatch(self, *args, **kwargs):
-        dispatcher = self._dispatcher or self._original(*args, **kwargs) or identity
-            
-        for ((specs, kwspecs), method) in self._methods.items():
-            if all(ismatch(arg, dispatcher(p)) for (arg, p) in zip(args, specs))\
-               and all(ismatch(kwargs[k], dispatcher(p)) for k, p in kwspecs):
-                yield method
+        patternfn = self.pattern_constructor or self.func(*args, **kwargs) or identity
+        for ((specs, kwspecs), method) in self.methods.items():
+            try:
+                yield (
+                    method,
+                    tuple(getmatch(arg, patternfn(p)) for (arg, p) in zip(args, specs)),
+                    {k:getmatch(kwargs[k], patternfn(p)) for k, p in kwspecs}
+                )
+            except MatchFailure:
+                continue
 
 
 def generic(*args, **kwargs):
     def decorator(f):
         return multimethod(f, **kwargs)
-    
+   
     if len(args) == 1 and len(kwargs) == 0:
         return multimethod(*args)
     elif len(args) == 0:
