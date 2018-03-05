@@ -1,10 +1,9 @@
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from abc import ABC
-from ..basics import identity
-from .patmat import predicate_method, MatchFailure, getmatch
+from funklib.core.prelude import identity
+from multimethods.patmat import predicate_method, MatchFailure, getmatch, Any
 from functools import reduce
-from collections import deque
-
+from itertools import repeat, chain
 
 class DispatchFailure(Exception):
     def __init__(self, generic, call_args, call_kwargs, *args, **kwargs):
@@ -35,7 +34,8 @@ class MethodCombiner:
         raise NotImplementedError()
 
 
-class FirstMethod(MethodCombiner):
+class ApplyFirst(MethodCombiner):
+    """Apply first method and return result"""
     def combine(self, methods, args, kwargs):
         try:
             (m, xargs, xkwargs) = next(methods)
@@ -44,26 +44,28 @@ class FirstMethod(MethodCombiner):
             self.fail(args, kwargs)
         
 
-class LastMethod(MethodCombiner):
+class ApplyLast(MethodCombiner):
+    """Apply last method and return result"""
     def combine(self, methods, args, kwargs):
         try:
-            (method, xargs, xkwargs) = dequeue(methods, maxlen=1).pop()
+            (method, xargs, xkwargs) = deque(methods, maxlen=1).pop()
             return method(*xargs, **xkwargs)
         except IndexError:
             self.fail(args, kwargs)
         
 
-class AllMethod(MethodCombiner):
+class ApplyAll(MethodCombiner):
+    """Apply all and yield all results"""
     def combine(self, methods, args, kwargs):
-        choices = tuple(methods)
-        if any(methods):
-            for (method, xargs, xkwargs) in methods:
-                yield method(*xargs, **xkwargs)
+        #choices = tuple(methods)
+        for (method, xargs, xkwargs) in methods:
+            yield method(*xargs, **xkwargs)
         else:
             self.fail(args, kwargs)
 
 
-class OpMethod(AllMethod):
+class ApplyReduce(ApplyAll):
+    """Apply all and reduce"""
     def __init__(self, generic, op):
         super().__init__(generic)
         self.op = op
@@ -75,16 +77,16 @@ class OpMethod(AllMethod):
         
 class multimethod:
     """A generic function object supporting multiple dispatch"""
-    def __init__(self, fn, pattern=None, method_combiner=None):
+    def __init__(self, fn, pattern=None, combiner=None):
         """
         Creates a multimethod object
         :param fn: function used in declaration
-        :param pattern: callable that can construct a pattern from the method dispatch specifiers
+        :param pattern: callable that can construct a pattern matcher from the method dispatch specifiers
         :param method_combiner: MethodCombiner object that will be used to compute final result from matched methods
         """
         self.pattern_constructor = pattern 
         self.func = fn
-        self.method_combiner = method_combiner or FirstMethod(self)
+        self.method_combiner = combiner or ApplyFirst(self)
         self.methods = OrderedDict(())
         self.__name__ = fn.__name__
         self.__doc__ = fn.__doc__
@@ -107,26 +109,67 @@ class multimethod:
             try:
                 yield (
                     method,
-                    tuple(getmatch(arg, patternfn(p)) for (arg, p) in zip(args, specs)),
-                    {k:getmatch(kwargs[k], patternfn(p)) for k, p in kwspecs}
+                    tuple(getmatch(arg, p) for (arg, p) in zip(args, chain(map(patternfn, specs), repeat(Any())))),
+                    {k:getmatch(kwarg, patternfn(kwspecs[k]) if k in kwspecs else Any()) for k, kwarg in kwargs}
                 )
             except MatchFailure:
                 continue
 
+    def method(self, *specs, **kwspecs):
+        return lambda f: self.add_method(specs, kwspecs, f) or self
 
-def generic(*args, **kwargs):
+
+def generic(fn=None, **kwargs):
     def decorator(f):
         return multimethod(f, **kwargs)
    
-    if len(args) == 1 and len(kwargs) == 0:
-        return multimethod(*args)
-    elif len(args) == 0:
+    if fn is not None:
+        return multimethod(fn, **kwargs)
+    else:
         return decorator
 
 
-def method(generic, *specs, **kwspecs):
-    def decorator(method):
-        generic.add_method(specs, kwspecs, method)
-        return generic
-    return decorator
+method = multimethod.method
 
+if __name__ == "__main__":
+    from multimethods.patmat import Compose, Equal, Key, AsPredicate, With
+    @generic(pattern=lambda k: AsPredicate(Compose(Equal(k), Key("type"))))
+    def describe(x): pass
+
+    @describe.method("particle")
+    def describe(x):
+        print(x)
+        return "It's not important"
+
+    @describe.method("triangle")
+    def describe(x):
+        print(x)
+        return "Hates particle man, hates person man"
+
+    @describe.method("universe")
+    def describe(x):
+        print(x)
+        return "Size of the entire universe"
+
+    @describe.method("person")
+    def describe(x):
+        print(x)
+        return "Lives his life in a garbage can"
+
+    print(describe({"type": "particle"}))
+    print(describe({"type": "triangle"}))
+    print(describe({"type": "universe"}))
+    print(describe({"type": "person"}))
+
+    @generic
+    def get_name(x): pass
+
+    @get_name.method(With(Key("type")))
+    def get_name(x):
+        print(x)
+        return "{} man".format(x.match)
+
+    print(get_name({"type": "particle", "id": 1}))
+    print(get_name({"type": "triangle", "kind": "obtuse"}))
+    print(get_name({"type": "universe", "size": "big"}))
+    print(get_name({"type": "person", "age": "45"}))

@@ -3,7 +3,7 @@ from contextlib import AbstractContextManager, ExitStack, contextmanager
 from abc import ABC, abstractmethod
 from enum import Enum
 from operator import *
-from ..basics import flip, const
+from funklib.core.prelude import flip, const
 from functools import wraps,partial
 from collections import namedtuple
 
@@ -16,15 +16,17 @@ def from_context(cm):
 
 class MatchFailure(Exception):
     """Exception raised in case of a pattern match failure"""
-    # def __init__(self, matched, pattern):
-    #     self.matched = matched
-    #     self.pattern = pattern
+    def __init__(self, matched=None, pattern=None):
+        self.matched = matched
+        self.pattern = pattern
 
-    # def __repr__(self):
-    #     return "MatchFailure({} ! {})".format(self.matched, self.pattern)
+    def __repr__(self):
+        return "MatchFailure(pattern={}, matched={})".format(
+            self.matched, self.pattern
+        )
 
-    # def __str__(self):
-    #     return "MatchFailure: value {!r} does not match pattern {!s}".format(self.matched, self.pattern)
+    def __str__(self):
+        return "MatchFailure: value {!r} does not match pattern {!r}".format(self.matched, self.pattern)
 
 
 class MatchSuccess(Exception):
@@ -37,38 +39,6 @@ class matchstatus(Enum):
     failed = 1
     succeeded = 2
     
-
-# class casecontext:
-#     def __init__(self, match_context, pattern=None):
-#         self._pattern = pattern
-#         self._match_context = match_context
-
-#     def __enter__(self):
-#         self._match_context._activate(self)
-#         self._match_context._status = matchstatus.pending
-#         if self._pattern is not None:
-#             return patterncontext(self._pattern, self._match_context.match_value)
-#         else:
-#             return None
-
-#     def __exit__(self, tp, value, tb):
-#         if tp is MatchFailure:
-#             self._match_context._status = matchstatus.failed
-#             self._match_context._tried += 1
-#             self._match_context._exit_case()
-#             return True
-#         elif any((tp,value,tb)):
-#             return None
-#         else:
-
-#             if self._match_context._status == matchstatus.failed:
-#                 self._match_context._tried += 1
-#                 self._match_context._exit_case()
-#                 return True
-#             else:
-#                 self._match_context._status = matchstatus.succeeded
-#                 self._match_context._exit_case()
-#                 raise MatchSuccess()
             
 
 class match:
@@ -176,7 +146,7 @@ def match_except(*exceptions):
     try:
         yield None
     except exceptions as ex:
-        raise MatchFailure(repr(ex)) from None
+        raise MatchFailure() from ex
     
     
 class Key(Pattern):
@@ -191,8 +161,7 @@ class Key(Pattern):
 
     
 class Keys(Pattern):
-    """Pattern that match a gettable object that contains a given key,
-    exposing the value associated with that key"""
+    """Pattern that match a mapping which includes certain keys"""
     def __init__(self, keys):
         self.keys = keys
 
@@ -221,6 +190,12 @@ class Attrs(Pattern):
     @match_except(AttributeError)
     def __match__(self, x):
         return tuple(getattr(x, attr) for attr in self.attributes)
+    
+
+class Any(Pattern):
+    """Pattern that match any value"""
+    def __match__(self, x):
+        return x
 
 
 def pattern(Pattern):
@@ -244,8 +219,18 @@ def ismatch(value, pattern):
         return False
 
 
-def getmatch(value, pattern):
-    return pattern.__match__(value)
+class Symbol(str): pass
+    
+_NoDefault = Symbol("NoDefault")
+    
+def getmatch(value, pattern, default=_NoDefault):
+    try:
+        return pattern.__match__(value)
+    except MatchFailure:
+        if default is not _NoDefault:
+            return default
+        else:
+            raise
     
     
 def predicate_method(f):
@@ -264,7 +249,7 @@ def predicate_classmethod(f):
         if f(cls, arg):
             return arg
         else:
-            raise MatchFailure()
+            raise MatchFailure
     return wrapper
 
 
@@ -274,7 +259,7 @@ def predicate_function(f):
         if f(arg):
             return arg
         else:
-            raise MatchFailure()
+            raise MatchFailure
     return wrapper
     
     
@@ -283,9 +268,14 @@ class Predicate(Pattern):
     def __init__(self, predicate):
         self.predicate = predicate
 
-    @predicate_method
     def __match__(self, x):
-        return self.predicate(x)
+        if self.predicate(x):
+            return x
+        else:
+            raise MatchFailure(matched=x, pattern=self)
+
+    def __repr__(self):
+        return "Predicate({})".format(self.predicate)
 
 
 class Is(Predicate):
@@ -293,11 +283,13 @@ class Is(Predicate):
         self.identity = identity
         self.predicate = partial(is_, identity)
 
-    @predicate_method
     def __match__(self, x):
-        return x is self.identity
+        if x is self.identity:
+            return x
+        else:
+            raise MatchFailure(matched=x, pattern=self)
 
-    
+        
 class Equal(Predicate):
     def __init__(self, value):
         self.equal = value
@@ -305,7 +297,11 @@ class Equal(Predicate):
 
     @predicate_method
     def __match__(self, x):
-        return x == self.equal    
+        if x == self.equal:
+            return x
+        else:
+            raise MatchFailure(matched=x, pattern=self)
+            
     
     
 class In(Predicate):
@@ -315,7 +311,11 @@ class In(Predicate):
 
     @predicate_method
     def __match__(self, x):
-        return x in self.container
+        if x in self.container:
+            return x
+        else:
+            raise MatchFailure(matched=x, pattern=self)
+
 
 
 class Compose(Pattern):
@@ -329,10 +329,11 @@ class Compose(Pattern):
 
     def __match__(self, x):
         m = x
-        for p in reversed(tuple(self.patterns)):
+        for p in reversed(self.patterns):
             m = getmatch(m, p)
         return m
 
+    
 
 class AsPredicate(Pattern):
     def __init__(self, pattern):
@@ -342,7 +343,7 @@ class AsPredicate(Pattern):
         if ismatch(x, self.pattern):
             return x
         else:
-            raise MatchFailure
+            raise MatchFailure(matched=x, pattern=self.pattern)
 
 
 WithMatch = namedtuple("WithMatch", ("value", "match"))
@@ -370,7 +371,7 @@ class All(Predicate):
         return all(map(partial(ismatch, x), self.predicates))
 
     
-class Any(Predicate):
+class AnyOf(Predicate):
     """Predicates combiner that match a value which is matched by any(at least one) subpredicates"""
     def __init__(self, *predicates):
         def _any(x):
