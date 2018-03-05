@@ -8,7 +8,7 @@ to the dispatch specifiers specified for every implementation(overloading) of th
 
 Traditionally, "dispatch specifiers" are the type/class of the parameters.
 
-```
+```python
 @generic(pattern=Type)
 def add(a,b): pass
 
@@ -27,7 +27,7 @@ def add(a,b): return a+b
 However, the dispatch specifiers can ultimately be arbitrary complex functions of the arguments.
 For example, one could also dispatch based on the value of a key in a dictionary, or of an attribute in an object.
 
-```
+```python
 from multimethods.patmat import AsPredicate, Compose, Equal, Key
 @generic(pattern=lambda k: AsPredicate(Compose(Equal(k), Key("shape"))))
 def area(s): pass
@@ -55,7 +55,7 @@ The dispatch specifiers can act as predicates on the arguments, restricting the 
 a particar multimethod implementation can handle, but also as "preprocessors",
 for example extracting a value from a complex object.
 
-```
+```python
 from multimethods.patmat import Key
 
 @generic(pattern=Key("shape"))
@@ -77,7 +77,7 @@ def describe(c): return "A {} is like a square, but longer".format(c)
 To keep a reference to the original value as well as the result of an extraction,
 one can use `With`.
 
-```
+```python
 from multimethods.patmat import With, Key
 
 @generic(pattern=lambda k: With(Key("name")))
@@ -108,7 +108,7 @@ If a methods' specifiers match the arguments, the method is "applicable".
 By default, only the first applicable method is used to compute the result of the multimethod call.
 However, it is possible to override this behavior by specifying a "method combination" algorithm.
 
-```
+```python
 from numbers import Number
 from multimethods.patmat import Type
 
@@ -128,18 +128,6 @@ print(at_last(1)) # Finally, a Number: 1
 print(at_last(2.0)) # Finally, a Number: 2.0
 
 ```
-
-## TODO
-
-* Memoizing for dispatch algorithm
-    * Currently, dispatching is linear in number of methods, 
-      not counting the complexity of the dispatch unification
-      (for Type dispatch, this should be constant)
-      Some kind of memoizing(e.g. LRU caching) of the result of the dispatch algorithm would be great.
-    * Overriding method combination on a per-call basis
-    * More docs/ API reference
-    * Unit testing/test coverage
-    * Other method combiners
 
 ~~~python
     from multimethods.patmat import Compose, Equal, Key, AsPredicate, With
@@ -184,3 +172,17 @@ print(at_last(2.0)) # Finally, a Number: 2.0
     print(get_name({"type": "universe", "size": "big"}))
     print(get_name({"type": "person", "age": "45"}))
 ~~~
+
+
+## TODO
+
+* Memoizing for dispatch algorithm
+    * Currently, dispatching is linear in number of methods, 
+      not counting the complexity of the dispatch unification
+      (for Type dispatch, this should be constant)
+      Some kind of memoizing(e.g. LRU caching) of the result of the dispatch algorithm would be great.
+    * Overriding method combination on a per-call basis
+    * More docs/ API reference
+    * Unit testing/test coverage
+    * Other method combiners
+
