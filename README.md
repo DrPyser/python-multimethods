@@ -172,17 +172,3 @@ print(at_last(2.0)) # Finally, a Number: 2.0
     print(get_name({"type": "universe", "size": "big"}))
     print(get_name({"type": "person", "age": "45"}))
 ~~~
-
-
-## TODO
-
-* Memoizing for dispatch algorithm
-    * Currently, dispatching is linear in number of methods, 
-      not counting the complexity of the dispatch unification
-      (for Type dispatch, this should be constant)
-      Some kind of memoizing(e.g. LRU caching) of the result of the dispatch algorithm would be great.
-    * Overriding method combination on a per-call basis
-    * More docs/ API reference
-    * Unit testing/test coverage
-    * Other method combiners
-
